@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"time"
+
 	"github.com/arzan03/SecureShare/internal/db"
 	"github.com/arzan03/SecureShare/internal/models"
 	"github.com/golang-jwt/jwt/v5"
@@ -13,19 +14,26 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Secret key for JWT (set in .env)
 var jwtSecret = os.Getenv("JWT_SECRET")
+
+// Allowed roles
+var validRoles = map[string]bool{
+	"user":  true,
+	"admin": true,
+}
+
 // HashPassword hashes a password using bcrypt
 func HashPassword(password string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	return string(hash), err
 }
+
 // VerifyPassword compares a plain password with a hashed password
 func VerifyPassword(password, hash string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
-// GenerateJWT generates a JWT token for authentication
+// GenerateJWT generates a JWT token with user ID and role
 func GenerateJWT(userID string, role string) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id": userID,
@@ -37,8 +45,8 @@ func GenerateJWT(userID string, role string) (string, error) {
 	return token.SignedString([]byte(jwtSecret))
 }
 
-// RegisterUser registers a new user
-func RegisterUser(email, password string) (models.User, error) {
+// RegisterUser registers a new user with role validation
+func RegisterUser(email, password, role string) (models.User, error) {
 	collection := db.GetCollection("secure_files", "users")
 
 	// Check if user already exists
@@ -46,6 +54,13 @@ func RegisterUser(email, password string) (models.User, error) {
 	err := collection.FindOne(context.TODO(), bson.M{"email": email}).Decode(&existingUser)
 	if err == nil {
 		return models.User{}, errors.New("email already in use")
+	}
+
+	// Validate role, default to "user" if empty
+	if role == "" {
+		role = "user"
+	} else if !validRoles[role] {
+		return models.User{}, errors.New("invalid role specified")
 	}
 
 	// Hash password
@@ -59,29 +74,33 @@ func RegisterUser(email, password string) (models.User, error) {
 		ID:        primitive.NewObjectID(),
 		Email:     email,
 		Password:  hashedPassword,
-		Role:      "user",
+		Role:      role,
 		CreatedAt: time.Now(),
 	}
-
 	_, err = collection.InsertOne(context.TODO(), user)
 	return user, err
 }
-// LoginUser authenticates a user and returns a JWT
-func LoginUser(email, password string) (string, error) {
+
+// LoginUser authenticates a user and returns a JWT with role info
+func LoginUser(email, password string) (string, string, error) {
 	collection := db.GetCollection("secure_files", "users")
 
 	var user models.User
 	err := collection.FindOne(context.TODO(), bson.M{"email": email}).Decode(&user)
 	if err != nil {
-		return "", errors.New("invalid credentials")
+		return "", "", errors.New("invalid credentials")
 	}
 
 	// Verify password
 	if !VerifyPassword(password, user.Password) {
-		return "", errors.New("invalid credentials")
+		return "", "", errors.New("invalid credentials")
 	}
 
-	// Generate JWT
-	return GenerateJWT(user.ID.Hex(), user.Role)
-}
+	// Generate JWT including role
+	token, err := GenerateJWT(user.ID.Hex(), user.Role)
+	if err != nil {
+		return "", "", err
+	}
 
+	return token, user.Role, nil
+}

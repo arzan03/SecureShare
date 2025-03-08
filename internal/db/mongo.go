@@ -38,4 +38,3 @@ func ConnectMongoDB(uri string) {
 func GetCollection(dbName, collectionName string) *mongo.Collection {
 	return MongoClient.Database(dbName).Collection(collectionName)
 }
-
