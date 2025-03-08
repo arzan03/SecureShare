@@ -34,13 +34,12 @@ func LoginHandler(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	token, role, err := services.LoginUser(request.Email, request.Password)
+	token, err := services.LoginUser(request.Email, request.Password)
 	if err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	return c.JSON(fiber.Map{
 		"token": token,
-		"role":  role,
 	})
 }

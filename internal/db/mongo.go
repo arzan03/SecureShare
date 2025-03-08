@@ -13,8 +13,8 @@ import (
 // MongoDB connection instance
 var MongoClient *mongo.Client
 
-// ConnectMongoDB initializes the database connection
-func ConnectMongoDB(uri string) {
+// ConnectMongoDB initializes the database connection and returns a reference to the database
+func ConnectMongoDB(uri string, dbName string) *mongo.Database {
 	clientOptions := options.Client().ApplyURI(uri)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -32,6 +32,9 @@ func ConnectMongoDB(uri string) {
 
 	fmt.Println("✅ Connected to MongoDB")
 	MongoClient = client
+
+	// Return the database reference
+	return client.Database(dbName)
 }
 
 // GetCollection returns a MongoDB collection

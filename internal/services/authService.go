@@ -16,11 +16,6 @@ import (
 
 var jwtSecret = os.Getenv("JWT_SECRET")
 
-// Allowed roles
-var validRoles = map[string]bool{
-	"user":  true,
-	"admin": true,
-}
 
 // HashPassword hashes a password using bcrypt
 func HashPassword(password string) (string, error) {
@@ -56,13 +51,7 @@ func RegisterUser(email, password, role string) (models.User, error) {
 		return models.User{}, errors.New("email already in use")
 	}
 
-	// Validate role, default to "user" if empty
-	if role == "" {
-		role = "user"
-	} else if !validRoles[role] {
-		return models.User{}, errors.New("invalid role specified")
-	}
-
+	
 	// Hash password
 	hashedPassword, err := HashPassword(password)
 	if err != nil {
@@ -74,7 +63,7 @@ func RegisterUser(email, password, role string) (models.User, error) {
 		ID:        primitive.NewObjectID(),
 		Email:     email,
 		Password:  hashedPassword,
-		Role:      role,
+		Role:      "user",
 		CreatedAt: time.Now(),
 	}
 	_, err = collection.InsertOne(context.TODO(), user)
@@ -82,25 +71,25 @@ func RegisterUser(email, password, role string) (models.User, error) {
 }
 
 // LoginUser authenticates a user and returns a JWT with role info
-func LoginUser(email, password string) (string, string, error) {
+func LoginUser(email, password string) (string, error) {
 	collection := db.GetCollection("secure_files", "users")
 
 	var user models.User
 	err := collection.FindOne(context.TODO(), bson.M{"email": email}).Decode(&user)
 	if err != nil {
-		return "", "", errors.New("invalid credentials")
+		return "",  errors.New("invalid credentials")
 	}
 
 	// Verify password
 	if !VerifyPassword(password, user.Password) {
-		return "", "", errors.New("invalid credentials")
+		return "", errors.New("invalid credentials")
 	}
 
 	// Generate JWT including role
 	token, err := GenerateJWT(user.ID.Hex(), user.Role)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
-	return token, user.Role, nil
+	return token, nil
 }
