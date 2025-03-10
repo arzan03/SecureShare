@@ -44,10 +44,12 @@ func main() {
 	admin.Get("/user/:userid", handlers.GetUserByID)
 	admin.Delete("/file/:file_id", handlers.AdminDeleteFile)
 
-	// File Routes
+
+	//File Route
 	file := app.Group("/file", middleware.AuthMiddleware)
 	file.Post("/upload", handlers.UploadFileHandler)
-	file.Get("/presigned/:id", handlers.GetPresignedURLHandler)
+	file.Post("/presigned/:id", handlers.GeneratePresignedURLHandler)
+	file.Get("/download/:id", handlers.ValidateDownloadHandler)
 
 	// Start server
 	log.Fatal(app.Listen(":8080"))

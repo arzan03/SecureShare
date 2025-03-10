@@ -3,6 +3,8 @@ package services
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/arzan03/SecureShare/internal/db"
+	"github.com/arzan03/SecureShare/internal/models"
 	"github.com/arzan03/SecureShare/internal/storage"
 	"github.com/gofiber/fiber/v2"
 	"github.com/minio/minio-go/v7"
@@ -17,42 +20,36 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// File Metadata Model
-type File struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Filename  string             `bson:"filename" json:"filename"`
-	URL       string             `bson:"url" json:"url"`
-	Owner     string             `bson:"owner" json:"owner"`
-	ExpiresAt time.Time          `bson:"expires_at" json:"expires_at"`
-	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+func generateSecureToken() (string, error) {
+	token := make([]byte, 16)
+	_, err := rand.Read(token)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate secure token: %w", err)
+	}
+	return hex.EncodeToString(token), nil
 }
 
-// UploadFile uploads a file to MinIO and saves metadata in MongoDB
-func UploadFile(c *fiber.Ctx, userID string) (File, error) {
+func UploadFile(c *fiber.Ctx, userID string) (models.File, error) {
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		return File{}, errors.New("failed to retrieve file")
+		return models.File{}, errors.New("failed to retrieve file")
 	}
 
-	// Open file
 	file, err := fileHeader.Open()
 	if err != nil {
-		return File{}, errors.New("failed to open file")
+		return models.File{}, errors.New("failed to open file")
 	}
 	defer file.Close()
 
-	// Read file content
 	fileBytes, err := io.ReadAll(file)
 	if err != nil {
-		return File{}, errors.New("failed to read file")
+		return models.File{}, errors.New("failed to read file")
 	}
 
-	// Generate file ID & filename
 	fileID := primitive.NewObjectID()
 	bucketName := "secure-files"
 	objectName := fmt.Sprintf("%s_%s", fileID.Hex(), fileHeader.Filename)
 
-	// Upload file to MinIO
 	_, err = storage.MinioClient.PutObject(
 		context.Background(),
 		bucketName,
@@ -61,65 +58,136 @@ func UploadFile(c *fiber.Ctx, userID string) (File, error) {
 		int64(len(fileBytes)),
 		minio.PutObjectOptions{ContentType: fileHeader.Header.Get("Content-Type")},
 	)
-
 	if err != nil {
-		return File{}, errors.New("failed to upload file")
+		return models.File{}, errors.New("failed to upload file")
 	}
 
-	// File Metadata
-	fileData := File{
-		ID:        fileID,
-		Filename:  fileHeader.Filename,
-		URL:       fmt.Sprintf("http://%s/%s/%s", os.Getenv("MINIO_ENDPOINT"), bucketName, objectName),
-		Owner:     userID,
-		ExpiresAt: time.Now().Add(24 * time.Hour), // Default expiration: 24 hours
-		CreatedAt: time.Now(),
+	secureToken, err := generateSecureToken()
+	if err != nil {
+		return models.File{}, errors.New("failed to generate secure token")
 	}
 
-	// Save metadata to MongoDB
+	fileData := models.File{
+		ID:            fileID,
+		Filename:      fileHeader.Filename,
+		URL:           fmt.Sprintf("http://%s/%s/%s", os.Getenv("MINIO_ENDPOINT"), bucketName, objectName),
+		Owner:         userID,
+		ExpiresAt:     time.Now().Add(24 * time.Hour),
+		CreatedAt:     time.Now(),
+		DownloadToken: secureToken,
+		TokenType:     "time-limited",
+		TokenExpires:  time.Now().Add(24 * time.Hour),
+	}
+
 	collection := db.GetCollection("secure_files", "files")
 	_, err = collection.InsertOne(context.TODO(), fileData)
 	if err != nil {
-		return File{}, errors.New("failed to save file metadata")
+		return models.File{}, errors.New("failed to save file metadata")
 	}
 
 	return fileData, nil
 }
 
-// GeneratePresignedURL generates a temporary download link for a file
-func GeneratePresignedURL(fileID string, userID string) (string, error) {
-	// Convert fileID to MongoDB ObjectID
+
+// GeneratePresignedURL creates a presigned URL with security measures.
+func GeneratePresignedURL(fileID, userID, tokenType string, duration time.Duration) (string, error) {
 	objID, err := primitive.ObjectIDFromHex(fileID)
 	if err != nil {
-		return "", errors.New("invalid file ID")
+		return "", fmt.Errorf("invalid file ID: %w", err)
 	}
 
-	// Fetch file metadata from MongoDB
 	collection := db.GetCollection("secure_files", "files")
-	var fileData struct {
-		Filename string `bson:"filename"`
-		Owner    string `bson:"owner"`
-	}
+	var fileData models.File
+
 	err = collection.FindOne(context.TODO(), bson.M{"_id": objID}).Decode(&fileData)
 	if err != nil {
-		return "", errors.New("file not found")
+		return "", fmt.Errorf("file not found: %w", err)
 	}
 
-	// Ensure user is the owner
 	if fileData.Owner != userID {
 		return "", errors.New("unauthorized access")
 	}
 
-	// Generate MinIO pre-signed URL
+	token, err := generateSecureToken()
+	if err != nil {
+		return "", err
+	}
+
+	// Adjust expiration based on token type
+	tokenExpires := time.Now().Add(duration)
+	if tokenType == "one-time" {
+		tokenExpires = time.Now().Add(30 * time.Minute)
+	}
+
+	_, err = collection.UpdateOne(
+		context.TODO(),
+		bson.M{"_id": objID},
+		bson.M{"$set": bson.M{
+			"download_token": token,
+			"token_type":     tokenType,
+			"token_expires":  tokenExpires,
+		}},
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to save download token: %w", err)
+	}
+
 	bucketName := "secure-files"
 	objectName := fmt.Sprintf("%s_%s", fileID, fileData.Filename)
-	expiry := time.Minute * 10 // Link valid for 10 minutes
+	expiry := duration
 
-	// Generate URL
-	reqParams := make(map[string][]string) // Ensure correct format
+	reqParams := map[string][]string{"token": {token}}
 	url, err := storage.MinioClient.PresignedGetObject(context.Background(), bucketName, objectName, expiry, reqParams)
 	if err != nil {
-		return "", errors.New("failed to generate download link")
+		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
+	}
+
+	return url.String(), nil
+}
+
+// ValidateDownload verifies the token and generates a presigned MinIO download link.
+func ValidateDownload(fileID, providedToken string) (string, error) {
+	objID, err := primitive.ObjectIDFromHex(fileID)
+	if err != nil {
+		return "", fmt.Errorf("invalid file ID: %w", err)
+	}
+
+	collection := db.GetCollection("secure_files", "files")
+	var fileData models.File
+
+	err = collection.FindOne(context.TODO(), bson.M{"_id": objID}).Decode(&fileData)
+	if err != nil {
+		return "", fmt.Errorf("file not found: %w", err)
+	}
+
+	if fileData.DownloadToken != providedToken {
+		return "", errors.New("invalid or expired download token")
+	}
+
+	if fileData.TokenType == "time-limited" && time.Now().After(fileData.TokenExpires) {
+		return "", errors.New("download token expired")
+	}
+
+	// Revoke one-time token after first use
+	if fileData.TokenType == "one-time" {
+		_, err = collection.UpdateOne(
+			context.TODO(),
+			bson.M{"_id": objID},
+			bson.M{"$unset": bson.M{"download_token": ""}}, // `unset` is better than setting empty string
+		)
+		if err != nil {
+			return "", fmt.Errorf("failed to revoke token: %w", err)
+		}
+	}
+
+	// Generate MinIO presigned URL
+	bucketName := "secure-files"
+	objectName := fmt.Sprintf("%s_%s", fileID, fileData.Filename)
+	expiry := 10 * time.Minute
+
+	url, err := storage.MinioClient.PresignedGetObject(context.Background(), bucketName, objectName, expiry, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate download link: %w", err)
 	}
 
 	return url.String(), nil

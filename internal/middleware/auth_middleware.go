@@ -7,8 +7,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-
-
 // AuthMiddleware validates JWT token and extracts user details
 func AuthMiddleware(c *fiber.Ctx) error {
 	// Get the Authorization header
