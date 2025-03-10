@@ -45,11 +45,18 @@ func main() {
 	admin.Delete("/file/:file_id", handlers.AdminDeleteFile)
 
 
-	//File Route
+	// File Routes
 	file := app.Group("/file", middleware.AuthMiddleware)
 	file.Post("/upload", handlers.UploadFileHandler)
 	file.Post("/presigned/:id", handlers.GeneratePresignedURLHandler)
 	file.Get("/download/:id", handlers.ValidateDownloadHandler)
+	file.Get("/list", handlers.ListUserFilesHandler) 
+	file.Get("/metadata/:id", handlers.GetFileMetadataHandler) // Specific route
+	file.Delete("/:id", handlers.DeleteFileHandler) // General dynamic route
+
+
+	
+
 
 	// Start server
 	log.Fatal(app.Listen(":8080"))
