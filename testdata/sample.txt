@@ -1,0 +1,2 @@
+This is a sample test file for the SecureShare API.
+It can be used to test file upload functionality.

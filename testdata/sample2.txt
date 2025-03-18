@@ -1,0 +1,3 @@
+This is a second sample test file for the SecureShare API.
+It can be used to test batch operations with multiple files.
+The batch operations like parallel deletion can be tested with multiple files.
