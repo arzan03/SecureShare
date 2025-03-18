@@ -3,13 +3,12 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/arzan03/SecureShare/internal/models"
 	"github.com/arzan03/SecureShare/internal/services"
-	"github.com/arzan03/SecureShare/internal/storage"
 	"github.com/gofiber/fiber/v2"
-	"github.com/minio/minio-go/v7"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -29,20 +28,25 @@ func UploadFileHandler(c *fiber.Ctx) error {
 	})
 }
 
-// GeneratePresignedURLHandler generates a presigned URL based on token type
-func GeneratePresignedURLHandler(c *fiber.Ctx) error {
-	fileID := c.Params("id")
+// BatchPresignedURLHandler generates multiple presigned URLs in parallel
+func BatchPresignedURLHandler(c *fiber.Ctx) error {
 	userID, ok := c.Locals("user_id").(string)
 	if !ok || userID == "" {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user"})
 	}
 
 	var requestBody struct {
-		TokenType string `json:"token_type"`
-		Duration  int    `json:"duration,omitempty"`
+		FileIDs   []string `json:"file_ids"`
+		TokenType string   `json:"token_type"`
+		Duration  int      `json:"duration,omitempty"`
 	}
+
 	if err := c.BodyParser(&requestBody); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if len(requestBody.FileIDs) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No file IDs provided"})
 	}
 
 	if requestBody.TokenType != "one-time" && requestBody.TokenType != "time-limited" {
@@ -54,15 +58,75 @@ func GeneratePresignedURLHandler(c *fiber.Ctx) error {
 		duration = 30 * time.Minute
 	}
 
-	presignedURL, err := services.GeneratePresignedURL(fileID, userID, requestBody.TokenType, duration)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
-	}
+	urls, errs := services.BatchGeneratePresignedURLs(requestBody.FileIDs, userID, requestBody.TokenType, duration)
 
 	return c.JSON(fiber.Map{
-		"presigned_url": presignedURL,
-		"expires_in":    fmt.Sprintf("%d minutes", requestBody.Duration),
+		"presigned_urls": urls,
+		"errors":         errs,
+		"expires_in":     fmt.Sprintf("%d minutes", requestBody.Duration),
 	})
+}
+
+// GeneratePresignedURLHandler generates presigned URLs for one or multiple files
+func GeneratePresignedURLHandler(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(string)
+	if !ok || userID == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user"})
+	}
+
+	// Structure that can handle both single and batch requests
+	var requestBody struct {
+		FileID    string   `json:"file_id"`
+		FileIDs   []string `json:"file_ids"`
+		TokenType string   `json:"token_type"`
+		Duration  int      `json:"duration,omitempty"`
+	}
+
+	if err := c.BodyParser(&requestBody); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	// Set default token type if not provided
+	if requestBody.TokenType != "one-time" && requestBody.TokenType != "time-limited" {
+		requestBody.TokenType = "time-limited"
+	}
+
+	// Set duration
+	duration := time.Duration(requestBody.Duration) * time.Minute
+	if requestBody.TokenType == "one-time" || requestBody.Duration <= 0 {
+		duration = 30 * time.Minute
+	}
+
+	// Determine if it's a batch request or single file request
+	if len(requestBody.FileIDs) > 0 {
+		// Batch processing
+		urls, errs := services.BatchGeneratePresignedURLs(requestBody.FileIDs, userID, requestBody.TokenType, duration)
+		return c.JSON(fiber.Map{
+			"presigned_urls": urls,
+			"errors":         errs,
+			"expires_in":     fmt.Sprintf("%d minutes", requestBody.Duration),
+		})
+	} else {
+		// Single file processing - check if from path parameter or body
+		fileID := c.Params("id")
+		if fileID == "" {
+			fileID = requestBody.FileID
+		}
+
+		if fileID == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No file ID provided"})
+		}
+
+		presignedURL, err := services.GeneratePresignedURL(fileID, userID, requestBody.TokenType, duration)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{
+			"presigned_url": presignedURL,
+			"expires_in":    fmt.Sprintf("%d minutes", requestBody.Duration),
+		})
+	}
 }
 
 func ValidateDownloadHandler(c *fiber.Ctx) error {
@@ -82,86 +146,144 @@ func ValidateDownloadHandler(c *fiber.Ctx) error {
 		"expires_in":   "10 minutes",
 	})
 }
-//List all the files uploaded by user
+
+// ListUserFilesHandler gets all files uploaded by user using parallel metadata fetching
 func ListUserFilesHandler(c *fiber.Ctx) error {
-    userID := c.Locals("user_id").(string)
+	userID := c.Locals("user_id").(string)
 
-    var files []models.File
-    cursor, err := fileCollection.Find(context.TODO(), bson.M{"owner": userID})
-    if err != nil {
-        return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-            "error": "Failed to retrieve files",
-        })
-    }
-    defer cursor.Close(context.TODO())
+	files, err := services.ListFilesWithMetadata(userID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
 
-    if err = cursor.All(context.TODO(), &files); err != nil {
-        return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-            "error": "Error decoding file metadata",
-        })
-    }
-
-    return c.JSON(files)
+	return c.JSON(files)
 }
-//Delete the file by user
+
+// DeleteFileHandler handles both single and batch file deletions
 func DeleteFileHandler(c *fiber.Ctx) error {
-    fileID := c.Params("id")
-    userID := c.Locals("user_id").(string)
+	userID := c.Locals("user_id").(string)
 
-    objID, err := primitive.ObjectIDFromHex(fileID)
-    if err != nil {
-        return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-            "error": "Invalid file ID",
-        })
-    }
+	// Check if this is a batch deletion request
+	var requestBody struct {
+		FileID  string   `json:"file_id"`
+		FileIDs []string `json:"file_ids"`
+	}
 
-    var file models.File
-    err = fileCollection.FindOne(context.TODO(), bson.M{"_id": objID, "owner": userID}).Decode(&file)
-    if err != nil {
-        return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
-            "error": "File not found or access denied",
-        })
-    }
+	// Try to parse a request body (for batch operations)
+	bodyErr := c.BodyParser(&requestBody)
 
-    // Delete from MinIO
-    err = storage.MinioClient.RemoveObject(context.TODO(), "your-bucket", file.Filename, minio.RemoveObjectOptions{})
-    if err != nil {
-        return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-            "error": "Failed to delete file from storage",
-        })
-    }
+	// Single file deletion (from path parameter)
+	fileID := c.Params("id")
+	if fileID != "" {
+		err := services.DeleteFileParallel(fileID, userID)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": err.Error(),
+			})
+		}
+		return c.JSON(fiber.Map{"message": "File deleted successfully"})
+	}
 
-    // Delete from MongoDB
-    _, err = fileCollection.DeleteOne(context.TODO(), bson.M{"_id": objID})
-    if err != nil {
-        return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-            "error": "Failed to delete file metadata",
-        })
-    }
+	// Handle body-based requests
+	if bodyErr != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request format"})
+	}
 
-    return c.JSON(fiber.Map{"message": "File deleted successfully"})
+	// Single file deletion from request body
+	if requestBody.FileID != "" {
+		err := services.DeleteFileParallel(requestBody.FileID, userID)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": err.Error(),
+			})
+		}
+		return c.JSON(fiber.Map{"message": "File deleted successfully"})
+	}
+
+	// Batch file deletion
+	if len(requestBody.FileIDs) > 0 {
+		results := make(map[string]string)
+		var wg sync.WaitGroup
+		resultsMutex := sync.RWMutex{}
+
+		// Process deletions in parallel
+		wg.Add(len(requestBody.FileIDs))
+		for _, fid := range requestBody.FileIDs {
+			go func(fileID string) {
+				defer wg.Done()
+				err := services.DeleteFileParallel(fileID, userID)
+
+				resultsMutex.Lock()
+				if err != nil {
+					results[fileID] = fmt.Sprintf("Error: %s", err.Error())
+				} else {
+					results[fileID] = "Deleted successfully"
+				}
+				resultsMutex.Unlock()
+			}(fid)
+		}
+		wg.Wait()
+
+		return c.JSON(fiber.Map{"results": results})
+	}
+
+	return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No file ID provided"})
 }
-//Get one file 
+
+// BatchDeleteFilesHandler deletes multiple files in parallel
+func BatchDeleteFilesHandler(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(string)
+
+	var requestBody struct {
+		FileIDs []string `json:"file_ids"`
+	}
+
+	if err := c.BodyParser(&requestBody); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	if len(requestBody.FileIDs) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No file IDs provided"})
+	}
+
+	results := make(map[string]string)
+	for _, fileID := range requestBody.FileIDs {
+		err := services.DeleteFileParallel(fileID, userID)
+		if err != nil {
+			results[fileID] = fmt.Sprintf("Error: %s", err.Error())
+		} else {
+			results[fileID] = "Deleted successfully"
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"results": results,
+	})
+}
+
+// GetFileMetadataHandler gets metadata of a single file
 func GetFileMetadataHandler(c *fiber.Ctx) error {
-    fileID := c.Params("id")
-    userID := c.Locals("user_id").(string) // Extract user ID from JWT
+	fileID := c.Params("id")
+	userID := c.Locals("user_id").(string) // Extract user ID from JWT
 
-    // Convert fileID to MongoDB ObjectID
-    objID, err := primitive.ObjectIDFromHex(fileID)
-    if err != nil {
-        return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-            "error": "Invalid file ID",
-        })
-    }
+	// Convert fileID to MongoDB ObjectID
+	objID, err := primitive.ObjectIDFromHex(fileID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid file ID",
+		})
+	}
 
-    // Query MongoDB for file metadata
-    var file models.File
-    err = fileCollection.FindOne(context.TODO(), bson.M{"_id": objID, "owner": userID}).Decode(&file)
-    if err != nil {
-        return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
-            "error": "File not found or access denied",
-        })
-    }
+	// Query MongoDB for file metadata
+	var file models.File
+	err = fileCollection.FindOne(context.TODO(), bson.M{"_id": objID, "owner": userID}).Decode(&file)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "File not found or access denied",
+		})
+	}
 
-    return c.JSON(file)
+	return c.JSON(file)
 }

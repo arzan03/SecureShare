@@ -44,19 +44,21 @@ func main() {
 	admin.Get("/user/:userid", handlers.GetUserByID)
 	admin.Delete("/file/:file_id", handlers.AdminDeleteFile)
 
-
 	// File Routes
 	file := app.Group("/file", middleware.AuthMiddleware)
 	file.Post("/upload", handlers.UploadFileHandler)
-	file.Post("/presigned/:id", handlers.GeneratePresignedURLHandler)
+
+	// URL generation - both endpoints point to the same handler now
+	file.Post("/presigned/:id", handlers.GeneratePresignedURLHandler) // Single file with ID in URL
+	file.Post("/presigned", handlers.GeneratePresignedURLHandler)     // Handles both single and batch requests from body
+
 	file.Get("/download/:id", handlers.ValidateDownloadHandler)
-	file.Get("/list", handlers.ListUserFilesHandler) 
-	file.Get("/metadata/:id", handlers.GetFileMetadataHandler) // Specific route
-	file.Delete("/:id", handlers.DeleteFileHandler) // General dynamic route
+	file.Get("/list", handlers.ListUserFilesHandler)
+	file.Get("/metadata/:id", handlers.GetFileMetadataHandler)
 
-
-	
-
+	// Deletion endpoints - both use same handler now
+	file.Delete("/:id", handlers.DeleteFileHandler)  // Single deletion with ID in URL
+	file.Post("/delete", handlers.DeleteFileHandler) // Handles both single and batch deletions from body
 
 	// Start server
 	log.Fatal(app.Listen(":8080"))
