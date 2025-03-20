@@ -25,8 +25,6 @@ jobs:
           --health-interval 30s
           --health-timeout 15s
           --health-retries 10
-          --entrypoint /bin/sh
-        command: ["-c", "mkdir -p /data && minio server --console-address ':9001' /data"]
         volumes:
           - /tmp/data:/data
 
@@ -54,6 +52,14 @@ jobs:
           curl -O https://dl.min.io/client/mc/release/linux-amd64/mc
           chmod +x mc
           sudo mv mc /usr/local/bin/
+
+      - name: Start MinIO
+        run: |
+          mkdir -p /tmp/data
+          nohup docker run -p 9000:9000 -p 9001:9001 --name minio \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            -v /tmp/data:/data quay.io/minio/minio server --console-address ":9001" /data &
+          sleep 10
 
       - name: Create MinIO bucket
         run: |
