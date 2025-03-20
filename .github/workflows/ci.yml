@@ -8,50 +8,67 @@ on:
     branches:
       - arzan03-ci-patch-1
 
-jobs:
-  test:
-    name: Test
+  jobs:
+  build-and-test:
     runs-on: ubuntu-latest
+    services:
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        ports:
+          - 9000:9000
+          - 9001:9001
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
+          --health-interval 30s
+          --health-timeout 15s
+          --health-retries 10
+      mongodb:
+        image: mongo:latest
+        ports:
+          - 27017:27017
+    
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21.0'
-          cache: true
+          go-version: '1.21'
 
-      - name: Start MinIO
-        run: |
-          docker run -d --name minio -p 9000:9000 -p 9001:9001 \
-            -e "MINIO_ROOT_USER=minioadmin" \
-            -e "MINIO_ROOT_PASSWORD=minioadmin" \
-            -v /tmp/data:/data minio/minio server --console-address ":9001" /data
-
-      - name: Start MongoDB
-        run: |
-          docker run -d --name mongodb -p 27017:27017 mongo:latest
-
-      - name: Install MinIO client
-        run: |
-          curl -O https://dl.min.io/client/mc/release/linux-amd64/mc
-          chmod +x mc
-          sudo mv mc /usr/local/bin/
-      
-      - name: Create MinIO bucket
-        run: |
-          mc alias set myminio http://localhost:9000 minioadmin minioadmin
-          mc mb myminio/secure-files --ignore-existing
-      
       - name: Install dependencies
-        run: go mod download
+        run: |
+          go mod tidy
 
-      - name: Run tests
-        run: go test -v ./...
+      - name: Build application
+        run: |
+          go build -o secure-share ./cmd/main.go
+
+      - name: Start application
+        run: |
+          ./secure-share &
         env:
-          JWT_SECRET: test_secret
+          MONGO_URI: mongodb://localhost:27017
           MINIO_ENDPOINT: http://localhost:9000
           MINIO_ACCESS_KEY: minioadmin
           MINIO_SECRET_KEY: minioadmin
-          MONGO_URI: mongodb://localhost:27017/secure_files_test
+
+      - name: Wait for API to be ready
+        run: |
+          for i in {1..10}; do
+            if curl -sSf http://localhost:8080/health; then
+              echo "API is ready"
+              exit 0
+            fi
+            echo "Waiting for API server to be ready (attempt $i/10)..."
+            sleep 5
+          done
+          echo "API did not start in time"
+          exit 1
+
+      - name: Run tests
+        run: |
+          go test -v ./...
