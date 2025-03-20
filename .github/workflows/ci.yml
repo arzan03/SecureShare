@@ -9,53 +9,49 @@ on:
       - arzan03-ci-patch-1
 
 jobs:
-  build-and-test:
+  test:
+    name: Test
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Docker
-        run: docker version
-
-      - name: Clean up previous resources
-        run: docker system prune -f
-
-      - name: Create local Docker network
-        run: docker network create github_network || true
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21.0'
+          cache: true
 
       - name: Start MinIO
         run: |
-          docker run -d --name minio --network github_network \
-            -p 9000:9000 -p 9001:9001 \
+          docker run -d --name minio -p 9000:9000 -p 9001:9001 \
             -e "MINIO_ROOT_USER=minioadmin" \
             -e "MINIO_ROOT_PASSWORD=minioadmin" \
-            minio/minio server --console-address ":9001" /data
-
-      - name: Verify MinIO is running
-        run: |
-          sleep 5  # Give MinIO time to start
-          docker ps -a
+            -v /tmp/data:/data minio/minio server --console-address ":9001" /data
 
       - name: Start MongoDB
         run: |
-          docker run -d --name mongodb --network github_network \
-            -p 27017:27017 \
-            mongo:latest
+          docker run -d --name mongodb -p 27017:27017 mongo:latest
 
-      - name: Verify MongoDB is running
+      - name: Install MinIO client
         run: |
-          sleep 5  # Give MongoDB time to start
-          docker ps -a
+          curl -O https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          sudo mv mc /usr/local/bin/
+      
+      - name: Create MinIO bucket
+        run: |
+          mc alias set myminio http://localhost:9000 minioadmin minioadmin
+          mc mb myminio/secure-files --ignore-existing
+      
+      - name: Install dependencies
+        run: go mod download
 
-      - name: Run Tests
-        run: |
-          echo "Running tests..."
-          # Add your test command here
-
-      - name: Cleanup
-        if: always()
-        run: |
-          docker stop minio mongodb || true
-          docker rm minio mongodb || true
+      - name: Run tests
+        run: go test -v ./...
+        env:
+          JWT_SECRET: test_secret
+          MINIO_ENDPOINT: http://localhost:9000
+          MINIO_ACCESS_KEY: minioadmin
+          MINIO_SECRET_KEY: minioadmin
+          MONGO_URI: mongodb://localhost:27017/secure_files_test
