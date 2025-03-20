@@ -1,0 +1,28 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Environment variables - don't include in image for security
+.env
+.env.*
+
+# Testing
+testdata/
+tests/
+
+# Binaries
+bin/
+tmp/
+
+# IDE files
+.vscode/
+.idea/
+
+# Misc
+*.md
+.DS_Store

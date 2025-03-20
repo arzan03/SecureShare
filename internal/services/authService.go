@@ -14,8 +14,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var jwtSecret = os.Getenv("JWT_SECRET")
-
+// Get JWT secret from environment
+func getJWTSecret() []byte {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		// Fallback for tests/development
+		return []byte("supersecret")
+	}
+	return []byte(secret)
+}
 
 // HashPassword hashes a password using bcrypt
 func HashPassword(password string) (string, error) {
@@ -37,7 +44,7 @@ func GenerateJWT(userID string, role string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(jwtSecret))
+	return token.SignedString(getJWTSecret())
 }
 
 // RegisterUser registers a new user with role validation
@@ -51,7 +58,6 @@ func RegisterUser(email, password, role string) (models.User, error) {
 		return models.User{}, errors.New("email already in use")
 	}
 
-	
 	// Hash password
 	hashedPassword, err := HashPassword(password)
 	if err != nil {
@@ -77,7 +83,7 @@ func LoginUser(email, password string) (string, error) {
 	var user models.User
 	err := collection.FindOne(context.TODO(), bson.M{"email": email}).Decode(&user)
 	if err != nil {
-		return "",  errors.New("invalid credentials")
+		return "", errors.New("invalid credentials")
 	}
 
 	// Verify password

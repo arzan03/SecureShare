@@ -1,13 +1,9 @@
 package middleware
 
 import (
-	"os"
-
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 )
-
-var jwtSecret = os.Getenv("JWT_SECRET")
 
 // AdminMiddleware ensures that only users with "admin" role can access admin routes
 func AdminMiddleware(c *fiber.Ctx) error {
@@ -21,7 +17,7 @@ func AdminMiddleware(c *fiber.Ctx) error {
 
 	// Parse token
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		return []byte(jwtSecret), nil
+		return getJWTSecret(), nil
 	})
 
 	if err != nil || !token.Valid {

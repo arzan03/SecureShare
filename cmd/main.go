@@ -11,14 +11,14 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	// Load environment variables
-	os.Setenv("JWT_SECRET", "supersecret") // Change this in production
-	os.Setenv("MINIO_ENDPOINT", "10.50.36.60:9000")
-	os.Setenv("MINIO_ACCESS_KEY", "minioadmin")
-	os.Setenv("MINIO_SECRET_KEY", "minioadmin")
+	// Load .env file if it exists
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found or error loading it, using environment variables")
+	}
 
 	// Initialize Fiber
 	app := fiber.New()
@@ -28,8 +28,14 @@ func main() {
 	app.Use(logger.New())
 	app.Use(cors.New())
 
+	// Get MongoDB URI from environment
+	mongoURI := os.Getenv("MONGO_URI")
+	if mongoURI == "" {
+		mongoURI = "mongodb://localhost:27017/secure_files" // Default fallback
+	}
+
 	// Connect to MongoDB
-	mongoDB := db.ConnectMongoDB("mongodb+srv://arzan03:pass123@go.znpbv.mongodb.net/?retryWrites=true&w=majority&appName=go", "secure_files")
+	mongoDB := db.ConnectMongoDB(mongoURI, "secure_files")
 
 	handlers.InitAdminHandler(mongoDB)
 	// Auth Routes
@@ -60,6 +66,12 @@ func main() {
 	file.Delete("/:id", handlers.DeleteFileHandler)  // Single deletion with ID in URL
 	file.Post("/delete", handlers.DeleteFileHandler) // Handles both single and batch deletions from body
 
+	// Get port from environment
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // Default port
+	}
+
 	// Start server
-	log.Fatal(app.Listen(":8080"))
+	log.Fatal(app.Listen(":" + port))
 }

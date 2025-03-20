@@ -1,11 +1,22 @@
 package middleware
 
 import (
+	"os"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// Use env variable for JWT secret
+func getJWTSecret() []byte {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		// Fallback for tests/development
+		return []byte("supersecret")
+	}
+	return []byte(secret)
+}
 
 // AuthMiddleware validates JWT token and extracts user details
 func AuthMiddleware(c *fiber.Ctx) error {
@@ -23,7 +34,7 @@ func AuthMiddleware(c *fiber.Ctx) error {
 
 	// Parse JWT token
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		return []byte(jwtSecret), nil
+		return getJWTSecret(), nil
 	})
 	if err != nil || !token.Valid {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token"})
