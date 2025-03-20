@@ -58,7 +58,7 @@ jobs:
 
       - name: Start Application
         run: |
-          go run main.go &
+          go run cmd/main.go &
           sleep 5 # Wait for the app to start
 
       - name: Run tests
