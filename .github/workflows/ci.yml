@@ -2,9 +2,10 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ arzan03-ci-patch-1 ]
   pull_request:
-    branches: [ main ]
+    branches: [ arzan03-ci-patch-1 ]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -12,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       minio:
-        image: quay.io/minio/minio
+        image: minio/minio:latest
         env:
           MINIO_ROOT_USER: minioadmin
           MINIO_ROOT_PASSWORD: minioadmin
@@ -21,10 +22,11 @@ jobs:
           - 9001:9001
         options: >-
           --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
-          --health-interval 15s
-          --health-timeout 10s
-          --health-retries 5
-          --entrypoint sh quay.io/minio/minio -c 'minio server --console-address ":9001" /data'
+          --health-interval 30s
+          --health-timeout 15s
+          --health-retries 10
+          --entrypoint /bin/sh
+        command: ["-c", "mkdir -p /data && minio server --console-address ':9001' /data"]
         volumes:
           - /tmp/data:/data
 
@@ -37,7 +39,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 3
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
