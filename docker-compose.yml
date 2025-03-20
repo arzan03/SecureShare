@@ -11,7 +11,7 @@ services:
     env_file:
       - .env
     environment:
-      - MINIO_ENDPOINT=minio:9000  # Override to use service name in container
+      - MINIO_ENDPOINT=http://minio:9000  # Explicitly use http://
 
   mongodb:
     image: mongo:latest
@@ -32,7 +32,7 @@ services:
     environment:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY}
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
-    command: server --console-address ":9001" /data
+    entrypoint: [ "/bin/sh", "-c", "minio server --console-address ':9001' /data" ]
 
 volumes:
   mongodb_data:
