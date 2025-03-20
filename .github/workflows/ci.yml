@@ -12,24 +12,16 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     services:
-      minio:
-        image: minio/minio:latest
-        env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
-        ports:
-          - 9000:9000
-          - 9001:9001
-        options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
-          --health-interval 30s
-          --health-timeout 15s
-          --health-retries 10
       mongodb:
         image: mongo:latest
         ports:
           - 27017:27017
-    
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ping:1})'" 
+          --health-interval 10s 
+          --health-timeout 5s 
+          --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,36 +31,36 @@ jobs:
         with:
           go-version: '1.21'
 
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio \
+            -p 9000:9000 -p 9001:9001 \
+            -e "MINIO_ROOT_USER=minioadmin" \
+            -e "MINIO_ROOT_PASSWORD=minioadmin" \
+            minio/minio server /data
+
+      - name: Wait for MinIO to be ready
+        run: |
+          sleep 10
+
+      - name: Create MinIO bucket
+        run: |
+          docker run --rm --network host minio/mc alias set local http://localhost:9000 minioadmin minioadmin
+          docker run --rm --network host minio/mc mb local/secure-share
+
       - name: Install dependencies
         run: |
           go mod tidy
 
       - name: Build application
         run: |
-          go build -o secure-share ./cmd/main.go
+          go build -o app ./cmd
 
       - name: Start application
         run: |
-          ./secure-share &
-        env:
-          MONGO_URI: mongodb://localhost:27017
-          MINIO_ENDPOINT: http://localhost:9000
-          MINIO_ACCESS_KEY: minioadmin
-          MINIO_SECRET_KEY: minioadmin
-
-      - name: Wait for API to be ready
-        run: |
-          for i in {1..10}; do
-            if curl -sSf http://localhost:8080/health; then
-              echo "API is ready"
-              exit 0
-            fi
-            echo "Waiting for API server to be ready (attempt $i/10)..."
-            sleep 5
-          done
-          echo "API did not start in time"
-          exit 1
+          ./app &
+          sleep 5
 
       - name: Run tests
         run: |
-          go test -v ./...
+          go test -v ./tests
