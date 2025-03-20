@@ -18,7 +18,13 @@ jobs:
           MINIO_ROOT_PASSWORD: minioadmin
         ports:
           - 9000:9000
-        command: server /data
+          - 9001:9001
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 3
+          --entrypoint /bin/sh -c "minio server --console-address ':9001' /data"
         volumes:
           - /tmp/data:/data
         
@@ -26,37 +32,41 @@ jobs:
         image: mongo:latest
         ports:
           - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ ping: 1 })' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 3
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.23.3'
           cache: true
-          
+
+      - name: Install MinIO client
+        run: |
+          curl -O https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          sudo mv mc /usr/local/bin/
+
       - name: Create MinIO bucket
         run: |
-          # Wait a moment for MinIO to be ready
-          sleep 5
-          # Install MinIO client
-          wget https://dl.min.io/client/mc/release/linux-amd64/mc -O mc
-          chmod +x mc
-          # Configure and create bucket
-          ./mc config host add myminio http://localhost:9000 minioadmin minioadmin
-          ./mc mb myminio/secure-files || true
-        continue-on-error: true
+          mc alias set myminio http://localhost:9000 minioadmin minioadmin
+          mc mb myminio/secure-files --ignore-existing
 
       - name: Install dependencies
-        run: go get github.com/joho/godotenv
+        run: go mod download
 
       - name: Run tests
         run: go test -v ./...
         env:
           JWT_SECRET: test_secret
-          MINIO_ENDPOINT: localhost:9000
+          MINIO_ENDPOINT: http://localhost:9000
           MINIO_ACCESS_KEY: minioadmin
           MINIO_SECRET_KEY: minioadmin
           MONGO_URI: mongodb://localhost:27017/secure_files_test
@@ -66,34 +76,36 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
         
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
+          username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Extract metadata for Docker
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=sha,format=long
+            type=raw,value=latest
+            type=sha,format=short
             type=ref,event=branch
-            latest
 
       - name: Build and push
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: true
@@ -102,4 +114,4 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            JWT_SECRET=production_default_change_me
+            JWT_SECRET=placeholder_replace_in_production
