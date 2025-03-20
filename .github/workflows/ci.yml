@@ -17,24 +17,23 @@ jobs:
           MINIO_ROOT_USER: minioadmin
           MINIO_ROOT_PASSWORD: minioadmin
         ports:
-        - 9000:9000
-        - 9001:9001
+          - 9000:9000
+          - 9001:9001
         options: >-
           --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 3
-          --entrypoint /bin/sh
-          -c "minio server --console-address ':9001' /data"
+          minio server --console-address ":9001" /data
         volumes:
-        - /tmp/data:/data
+          - /tmp/data:/data
 
       mongodb:
         image: mongo:latest
         ports:
           - 27017:27017
         options: >-
-          --health-cmd "mongo --eval 'db.runCommand({ ping: 1 })' || exit 1"
+          --health-cmd "mongosh --eval 'db.runCommand({ ping: 1 })' || exit 1"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 3
@@ -71,4 +70,3 @@ jobs:
           MINIO_ACCESS_KEY: minioadmin
           MINIO_SECRET_KEY: minioadmin
           MONGO_URI: mongodb://localhost:27017/secure_files_test
-
