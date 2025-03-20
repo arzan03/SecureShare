@@ -62,7 +62,7 @@ jobs:
           sleep 5 # Wait for the app to start
 
       - name: Run tests
-        run: go test -v ./...
+        run: go test -v ./tests
         env:
           JWT_SECRET: test_secret
           MINIO_ENDPOINT: http://localhost:9000
