@@ -24,7 +24,8 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 3
-          server --console-address ":9001" /data
+          --entrypoint /bin/sh
+          -c "minio server --console-address ':9001' /data"
         volumes:
         - /tmp/data:/data
 
