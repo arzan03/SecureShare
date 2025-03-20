@@ -9,58 +9,63 @@ on:
       - arzan03-ci-patch-1
 
 jobs:
-  build-and-test:
+  test:
+    name: Test
     runs-on: ubuntu-latest
-    services:
-      mongodb:
-        image: mongo:latest
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.runCommand({ping:1})'" 
-          --health-interval 10s 
-          --health-timeout 5s 
-          --health-retries 5
-
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.21.0'
+          cache: true
 
       - name: Start MinIO
         run: |
-          docker run -d --name minio \
-            -p 9000:9000 -p 9001:9001 \
+          docker run -d --name minio -p 9000:9000 -p 9001:9001 \
             -e "MINIO_ROOT_USER=minioadmin" \
             -e "MINIO_ROOT_PASSWORD=minioadmin" \
-            minio/minio server /data
+            -v /tmp/data:/data minio/minio server --console-address ":9001" /data
+
+      - name: Start MongoDB
+        run: |
+          docker run -d --name mongodb -p 27017:27017 mongo:latest
+
+      - name: Install MinIO client
+        run: |
+          curl -O https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          sudo mv mc /usr/local/bin/
 
       - name: Wait for MinIO to be ready
         run: |
-          sleep 10
+          for i in {1..5}; do
+            if mc alias set myminio http://localhost:9000 minioadmin minioadmin; then
+              echo "MinIO is ready"
+              break
+            fi
+            echo "Waiting for MinIO..."
+            sleep 5
+          done
 
       - name: Create MinIO bucket
-        run: |
-          docker run --rm --network host minio/mc alias set local http://localhost:9000 minioadmin minioadmin
-          docker run --rm --network host minio/mc mb local/secure-share
+        run: mc mb myminio/secure-files --ignore-existing
 
       - name: Install dependencies
-        run: |
-          go mod tidy
+        run: go mod download
 
-      - name: Build application
+      - name: Start Application
         run: |
-          go build -o app ./cmd
-
-      - name: Start application
-        run: |
-          ./app &
-          sleep 5
+          go run main.go &
+          sleep 5 # Wait for the app to start
 
       - name: Run tests
-        run: |
-          go test -v ./tests
+        run: go test -v ./...
+        env:
+          JWT_SECRET: test_secret
+          MINIO_ENDPOINT: http://localhost:9000
+          MINIO_ACCESS_KEY: minioadmin
+          MINIO_SECRET_KEY: minioadmin
+          MONGO_URI: mongodb://localhost:27017/secure_files_test
